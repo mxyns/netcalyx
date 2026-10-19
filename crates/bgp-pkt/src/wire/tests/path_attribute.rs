@@ -1298,21 +1298,21 @@ fn test_mp_reach_nlri_ipv6() -> Result<(), MpReachWritingError> {
         &good_wire,
         false,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         &good,
     );
     test_parsed_completely_with_three_inputs(
         &good_extended_wire,
         true,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         &good,
     );
     test_parsed_completely_with_three_inputs(
         &unknown_address_type_wire,
         false,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         &unknown_address_type,
     );
 
@@ -1320,26 +1320,26 @@ fn test_mp_reach_nlri_ipv6() -> Result<(), MpReachWritingError> {
         MpReach,
         bool,
         &HashMap<AddressType, u8>,
-        &HashMap<AddressType, bool>,
+        &BgpParsingContext,
         LocatedMpReachParsingError<'_>,
     >(
         &invalid_afi_wire,
         false,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         nom::Err::Error(invalid_afi),
     );
     test_parse_error_with_three_inputs::<
         MpReach,
         bool,
         &HashMap<AddressType, u8>,
-        &HashMap<AddressType, bool>,
+        &BgpParsingContext,
         LocatedMpReachParsingError<'_>,
     >(
         &invalid_safi_wire,
         false,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         nom::Err::Error(invalid_safi),
     );
 
@@ -1383,7 +1383,7 @@ fn test_mp_reach_nlri_ipv4_ipv6_next_hop() -> Result<(), MpReachWritingError> {
         &good_no_link_local_wire,
         true,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         &good_no_link_local,
     );
 
@@ -1391,7 +1391,7 @@ fn test_mp_reach_nlri_ipv4_ipv6_next_hop() -> Result<(), MpReachWritingError> {
         &good_link_local_wire,
         true,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         &good_link_local,
     );
 
@@ -1445,7 +1445,7 @@ fn test_mp_reach_nlri_ipv4_mpls_labels_ipv6_next_hop() -> Result<(), MpReachWrit
         &good_no_link_local_wire,
         true,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         &good_no_link_local,
     );
 
@@ -1453,7 +1453,7 @@ fn test_mp_reach_nlri_ipv4_mpls_labels_ipv6_next_hop() -> Result<(), MpReachWrit
         &good_link_local_wire,
         true,
         &HashMap::new(),
-        &HashMap::new(),
+        &BgpParsingContext::default(),
         &good_link_local,
     );
 
