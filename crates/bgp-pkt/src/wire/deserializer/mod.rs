@@ -41,7 +41,7 @@ use netcalyx_parse_utils::{
 };
 
 use crate::BgpMessage;
-use crate::capabilities::{AddPathAddressFamily, BgpCapability};
+use crate::capabilities::{AddPathAddressFamily, AddPathCapability, BgpCapability};
 use crate::iana::{BgpMessageType, UndefinedBgpMessageType};
 use crate::notification::{BgpNotificationMessage, FiniteStateMachineError, MessageHeaderError};
 use crate::wire::deserializer::capabilities::BgpCapabilityParsingError;
@@ -213,42 +213,27 @@ impl BgpParsingContext {
         &mut self.add_path
     }
 
-     /// Store negotiated ADD-PATH support from the local OPEN's perspective.
-     pub fn update_negotiated_add_path(
-       &mut self,
-       add_path: &crate::capabilities::AddPathCapability,
-     ) {
-       for address_family in add_path.address_families() {
-           self.add_path
-               .insert(address_family.address_type(), address_family.clone());
-       }
-     }
+    pub fn update_add_path(&mut self, add_path: &AddPathCapability) {
+        for address_family in add_path.address_families() {
+            self.add_path
+                .insert(address_family.address_type(), *address_family);
+        }
+    }
 
-     /// Whether ADD-PATH applies to `address_type` for the current message
-     /// direction.
-     #[inline]
-     pub fn add_path_enabled(&self, address_type: AddressType) -> bool {
-       self.add_path
-           .add_path_enabled(address_type, !self.inbound_message)
-     }
-
+    /// Whether ADD-PATH applies to `address_type` for the current message
+    /// direction.
     #[inline]
-    pub fn update_capabilities(&mut self, capability: &BgpCapability, adj_rib_out: bool) {
+    pub fn add_path_enabled(&self, address_type: AddressType) -> bool {
+        self.add_path
+            .add_path_enabled(address_type, !self.inbound_message)
+    }
+
+    /// Store capability settings, including both ADD-PATH directions from
+    /// the local OPEN's perspective.
+    #[inline]
+    pub fn update_capabilities(&mut self, capability: &BgpCapability) {
         match capability {
-            BgpCapability::AddPath(add_path) => {
-                for address_family in add_path.address_families() {
-                    let address_type = address_family.address_type();
-                    let receive = if adj_rib_out {
-                        address_family.send()
-                    } else {
-                        address_family.receive()
-                    };
-                    self.add_path.insert(
-                        address_type,
-                        AddPathAddressFamily::new(address_type, false, receive),
-                    );
-                }
-            }
+            BgpCapability::AddPath(add_path) => self.update_add_path(add_path),
             BgpCapability::MultipleLabels(multiple_labels) => {
                 for multiple_label in multiple_labels {
                     self.multiple_labels_mut()
