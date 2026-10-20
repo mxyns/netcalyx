@@ -24,7 +24,6 @@ use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use netcalyx_bgp_pkt::BgpMessage;
 use netcalyx_bgp_pkt::capabilities::BgpCapability;
-use std::collections::HashSet;
 
 use crate::wire::deserializer::BmpParsingContext;
 use netcalyx_bgp_pkt::capabilities::{AddPathAddressFamily, AddPathCapability, MultipleLabel};
@@ -131,6 +130,34 @@ fn negotiate_add_path(
     )
 }
 
+/// Select both receiver limits (inbound, outbound) for each commonly advertised
+/// address family. Without a common entry, the parser defaults to a single
+/// label (RFC 8277).
+fn negotiate_multiple_labels(
+    sent_caps: &[Vec<MultipleLabel>],
+    received_caps: &[Vec<MultipleLabel>],
+) -> (Vec<MultipleLabel>, Vec<MultipleLabel>) {
+    let mut inbound: Vec<MultipleLabel> = Vec::new();
+    let mut outbound = Vec::new();
+    for label in sent_caps.iter().flatten() {
+        if inbound
+            .iter()
+            .any(|previous| previous.address_type() == label.address_type())
+        {
+            continue;
+        }
+        if let Some(remote) = received_caps
+            .iter()
+            .flatten()
+            .find(|other| other.address_type() == label.address_type())
+        {
+            inbound.push(label.clone());
+            outbound.push(remote.clone());
+        }
+    }
+    (inbound, outbound)
+}
+
 impl BmpCodec {
     pub fn update_parsing_ctx(&mut self, msg: &BmpMessage) {
         self.ctx.update(msg)
@@ -159,14 +186,6 @@ impl BmpParsingContext {
             let is_loc_rib = peer_up.peer_header().peer_type().is_loc_rib();
             let negotiated_add_path =
                 negotiate_add_path(&sent_add_path_caps, &received_add_path_caps, is_loc_rib);
-            let sent_multiple_labels_caps: HashSet<MultipleLabel> =
-                HashSet::from_iter(sent_multiple_labels_caps.into_iter().flatten());
-            let received_multiple_labels_caps: HashSet<MultipleLabel> =
-                HashSet::from_iter(received_multiple_labels_caps.into_iter().flatten());
-            let common_multiple_labels_caps: Vec<MultipleLabel> = sent_multiple_labels_caps
-                .intersection(&received_multiple_labels_caps)
-                .cloned()
-                .collect();
             // Add Key for the router announcing BMP to the collector
             let peer_key = PeerKey::from_peer_header(peer_up.peer_header());
             let bgp_ctx = ctx.entry(peer_key).or_default();
@@ -184,10 +203,13 @@ impl BmpParsingContext {
                 bgp_ctx.add_path_mut().clear();
                 bgp_ctx.multiple_labels_mut().clear();
             }
+            let (inbound_multiple_labels, outbound_multiple_labels) = negotiate_multiple_labels(
+                &sent_multiple_labels_caps,
+                &received_multiple_labels_caps,
+            );
             bgp_ctx.update_add_path(&negotiated_add_path);
-            bgp_ctx.update_capabilities(&BgpCapability::MultipleLabels(
-                common_multiple_labels_caps.clone(),
-            ));
+            bgp_ctx.update_multiple_labels(&inbound_multiple_labels, true);
+            bgp_ctx.update_multiple_labels(&outbound_multiple_labels, false);
 
             // Add a key for the BGP Peer of the first router
             // In Loc-Rib the bgp open message is duplicated,
@@ -204,9 +226,8 @@ impl BmpParsingContext {
                 bgp_ctx.add_path_mut().clear();
                 bgp_ctx.multiple_labels_mut().clear();
                 bgp_ctx.update_add_path(&negotiated_add_path);
-                bgp_ctx.update_capabilities(&BgpCapability::MultipleLabels(
-                    common_multiple_labels_caps,
-                ));
+                bgp_ctx.update_multiple_labels(&inbound_multiple_labels, true);
+                bgp_ctx.update_multiple_labels(&outbound_multiple_labels, false);
             }
         }
 
@@ -489,6 +510,40 @@ mod tests {
     }
 
     #[test]
+    fn test_multiple_labels_negotiation() {
+        let ipv4 = AddressType::Ipv4MplsLabeledVpn;
+        let ipv6 = AddressType::Ipv6MplsLabeledVpn;
+        for local_count in [2, 3, 255] {
+            for remote_count in [2, 5, 255] {
+                let local = vec![vec![
+                    MultipleLabel::new(ipv4, local_count),
+                    // Duplicate entries must not replace the first count.
+                    MultipleLabel::new(ipv4, 7),
+                    MultipleLabel::new(ipv6, 4),
+                ]];
+                let remote = vec![vec![
+                    MultipleLabel::new(ipv4, remote_count),
+                    MultipleLabel::new(ipv4, 8),
+                ]];
+                assert_eq!(
+                    negotiate_multiple_labels(&local, &remote),
+                    (
+                        vec![MultipleLabel::new(ipv4, local_count)],
+                        vec![MultipleLabel::new(ipv4, remote_count)],
+                    )
+                );
+                for (sent, received) in [
+                    (local.as_slice(), [].as_slice()),
+                    ([].as_slice(), remote.as_slice()),
+                    ([].as_slice(), [].as_slice()),
+                ] {
+                    assert_eq!(negotiate_multiple_labels(sent, received), (vec![], vec![]));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_add_path_direction_negotiation() {
         let combinations = itertools::iproduct!(
             [false, true],
@@ -519,6 +574,14 @@ mod tests {
                     id,
                     vec![BgpOpenMessageParameter::Capabilities(vec![
                         BgpCapability::AddPath(AddPathCapability::new(families)),
+                        BgpCapability::MultipleLabels(vec![MultipleLabel::new(
+                            AddressType::Ipv4MplsLabeledVpn,
+                            if id == Ipv4Addr::new(192, 0, 2, 2) {
+                                2
+                            } else {
+                                5
+                            },
+                        )]),
                     ])],
                 ))
             };
@@ -564,6 +627,12 @@ mod tests {
                     id,
                 );
                 let peer_ctx = codec.ctx.get_peer(&key).unwrap();
+                assert_eq!(
+                    peer_ctx
+                        .multiple_labels()
+                        .get(&AddressType::Ipv4MplsLabeledVpn),
+                    Some(&(2, 5))
+                );
                 for out in [false, true] {
                     let expected = if out {
                         local_send && remote_receive
