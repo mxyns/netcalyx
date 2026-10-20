@@ -93,6 +93,7 @@ impl WritablePdu<BGPCapabilityWritingError> for BgpCapability {
             }
             Self::MultipleLabels(value) => {
                 writer.write_u8(self.code().unwrap().into())?;
+                writer.write_u8(len)?;
                 for addr in value {
                     addr.write(writer)?;
                 }
