@@ -28,7 +28,7 @@ use crate::wire::deserializer::nlri::*;
 use crate::wire::deserializer::path_attribute::{
     BgpLsAttributeParsingError, SegmentIdentifierParsingError,
 };
-use crate::wire::deserializer::{BgpParsingContext, IpAddrParsingError};
+use crate::wire::deserializer::{BgpParsingContext, IpAddrParsingError, MultipleLabelsMap};
 use crate::wire::serializer::nlri::{IPV4_LEN, IPV6_LEN, IPV6_WITH_LINK_LOCAL_LEN};
 use netcalyx_iana::address_family::{
     AddressFamily, AddressType, SubsequentAddressFamily, UndefinedAddressFamily,
@@ -46,7 +46,6 @@ use nom::IResult;
 use nom::error::ErrorKind;
 use nom::number::complete::{be_u8, be_u16, be_u32, be_u64, be_u128};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 const OPTIONAL_PATH_ATTRIBUTE_MASK: u8 = 0x80;
@@ -119,7 +118,7 @@ impl<'a> ReadablePduWithOneInput<'a, &mut BgpParsingContext, LocatedPathAttribut
         buf: Span<'a>,
         ctx: &mut BgpParsingContext,
     ) -> IResult<Span<'a>, Self, LocatedPathAttributeParsingError<'a>> {
-        let (asn4, multiple_labels, add_path_map) = (ctx.asn4, &ctx.multiple_labels, &*ctx);
+        let (asn4, multiple_labels, add_path_map) = (ctx.asn4, ctx.multiple_labels(), &*ctx);
         let (buf, attributes) = be_u8(buf)?;
         let buf_before_code = buf;
         let (buf, code) = be_u8(buf)?;
@@ -686,7 +685,7 @@ impl<'a>
     ReadablePduWithThreeInputs<
         'a,
         bool,
-        &HashMap<AddressType, u8>,
+        &MultipleLabelsMap,
         &BgpParsingContext,
         LocatedMpReachParsingError<'a>,
     > for MpReach
@@ -694,9 +693,14 @@ impl<'a>
     fn from_wire(
         buf: Span<'a>,
         extended_length: bool,
-        multiple_labels: &HashMap<AddressType, u8>,
+        multiple_labels: &MultipleLabelsMap,
         add_path_map: &BgpParsingContext,
     ) -> IResult<Span<'a>, Self, LocatedMpReachParsingError<'a>> {
+        let multiple_labels_limit = |address_type| {
+            multiple_labels
+                .get(&address_type)
+                .map_or(1, |limits| limits.0)
+        };
         let (buf, mp_buf) = if extended_length {
             nom::multi::length_data(be_u16)(buf)?
         } else {
@@ -751,7 +755,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     false,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((
                     buf,
@@ -772,7 +776,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     false,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((buf, MpReach::Ipv4MplsVpnUnicast { next_hop, nlri }))
             }
@@ -835,7 +839,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     false,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((
                     buf,
@@ -856,7 +860,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     false,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((buf, MpReach::Ipv6MplsVpnUnicast { next_hop, nlri }))
             }
@@ -1055,7 +1059,7 @@ impl<'a>
     ReadablePduWithThreeInputs<
         'a,
         bool,
-        &HashMap<AddressType, u8>,
+        &MultipleLabelsMap,
         &BgpParsingContext,
         LocatedMpUnreachParsingError<'a>,
     > for MpUnreach
@@ -1063,9 +1067,14 @@ impl<'a>
     fn from_wire(
         buf: Span<'a>,
         extended_length: bool,
-        multiple_labels: &HashMap<AddressType, u8>,
+        multiple_labels: &MultipleLabelsMap,
         add_path_map: &BgpParsingContext,
     ) -> IResult<Span<'a>, Self, LocatedMpUnreachParsingError<'a>> {
+        let multiple_labels_limit = |address_type| {
+            multiple_labels
+                .get(&address_type)
+                .map_or(1, |limits| limits.0)
+        };
         let (buf, mp_buf) = if extended_length {
             nom::multi::length_data(be_u16)(buf)?
         } else {
@@ -1097,7 +1106,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     true,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((buf, MpUnreach::Ipv4NlriMplsLabels { nlri }))
             }
@@ -1109,7 +1118,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     true,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((buf, MpUnreach::Ipv4MplsVpnUnicast { nlri }))
             }
@@ -1135,7 +1144,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     true,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((buf, MpUnreach::Ipv6NlriMplsLabels { nlri }))
             }
@@ -1147,7 +1156,7 @@ impl<'a>
                     mp_buf,
                     add_path,
                     true,
-                    *multiple_labels.get(&addr_type).unwrap_or(&1),
+                    multiple_labels_limit(addr_type),
                 )?;
                 Ok((buf, MpUnreach::Ipv6MplsVpnUnicast { nlri }))
             }

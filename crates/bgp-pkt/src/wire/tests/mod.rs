@@ -171,6 +171,48 @@ fn test_add_path_direction_selection_and_capability_updates() {
 }
 
 #[test]
+fn test_multiple_labels_map() {
+    let ipv4 = AddressType::Ipv4NlriMplsLabels;
+    let mut map: crate::wire::deserializer::MultipleLabelsMap =
+        [(ipv4, (2, 5))].into_iter().collect();
+    assert_eq!(map.get(&ipv4), Some(&(2, 5)));
+    let cloned = map.clone();
+    assert_eq!(map, cloned);
+    map.insert(ipv4, (3, 4));
+    assert_eq!(cloned.get(&ipv4), Some(&(2, 5)));
+    map.clear();
+    assert!(map.is_empty());
+    assert!(crate::wire::deserializer::MultipleLabelsMap::default().is_empty());
+}
+
+#[test]
+fn test_directional_multiple_labels_storage() {
+    let ipv4 = AddressType::Ipv4NlriMplsLabels;
+    let ipv6 = AddressType::Ipv6NlriMplsLabels;
+    let mut ctx = BgpParsingContext::default();
+    for (inbound, ipv4_limit, ipv6_limit) in [(true, 2, 3), (false, 5, 4)] {
+        ctx.set_inbound_message(inbound);
+        ctx.update_capabilities(&BgpCapability::MultipleLabels(vec![
+            crate::capabilities::MultipleLabel::new(ipv4, ipv4_limit),
+        ]));
+        ctx.update_capabilities(&BgpCapability::MultipleLabels(vec![
+            crate::capabilities::MultipleLabel::new(ipv6, ipv6_limit),
+        ]));
+    }
+    assert_eq!(ctx.multiple_labels().get(&ipv4), Some(&(2, 5)));
+    assert_eq!(ctx.multiple_labels().get(&ipv6), Some(&(3, 4)));
+    let mut message_ctx = ctx.clone();
+    message_ctx.set_inbound_message(false);
+    message_ctx.update_capabilities(&BgpCapability::MultipleLabels(vec![
+        crate::capabilities::MultipleLabel::new(ipv4, 1),
+    ]));
+    assert_eq!(message_ctx.multiple_labels().get(&ipv4), Some(&(2, 1)));
+    assert_eq!(ctx.multiple_labels().get(&ipv4), Some(&(2, 5)));
+    ctx.multiple_labels_mut().clear();
+    assert!(ctx.multiple_labels().is_empty());
+}
+
+#[test]
 fn test_bgp_message_not_synchronized_marker() {
     let bad_marker = [0x00; 16];
     let invalid_wire = combine(vec![&bad_marker, &[0x00, 0x13, 0x04]]);
