@@ -176,6 +176,14 @@ fn test_multiple_labels_map() {
     let mut map: crate::wire::deserializer::MultipleLabelsMap =
         [(ipv4, (2, 5))].into_iter().collect();
     assert_eq!(map.get(&ipv4), Some(&(2, 5)));
+    assert_eq!(map.multiple_labels_limit(ipv4, true), 2);
+    assert_eq!(map.multiple_labels_limit(ipv4, false), 5);
+    for inbound in [true, false] {
+        assert_eq!(
+            map.multiple_labels_limit(AddressType::Ipv6NlriMplsLabels, inbound),
+            1
+        );
+    }
     let cloned = map.clone();
     assert_eq!(map, cloned);
     map.insert(ipv4, (3, 4));

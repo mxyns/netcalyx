@@ -132,6 +132,19 @@ impl std::ops::DerefMut for AddPathMap {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MultipleLabelsMap(HashMap<AddressType, (u8, u8)>);
 
+impl MultipleLabelsMap {
+    /// Return the receiver limit for the message direction, defaulting to one
+    /// label.
+    pub fn multiple_labels_limit(&self, address_type: AddressType, inbound_message: bool) -> u8 {
+        self.0.get(&address_type).map_or(
+            1,
+            |limits| {
+                if inbound_message { limits.0 } else { limits.1 }
+            },
+        )
+    }
+}
+
 impl FromIterator<(AddressType, (u8, u8))> for MultipleLabelsMap {
     fn from_iter<T: IntoIterator<Item = (AddressType, (u8, u8))>>(iter: T) -> Self {
         Self(iter.into_iter().collect())

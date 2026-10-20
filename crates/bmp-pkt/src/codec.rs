@@ -341,7 +341,8 @@ mod tests {
         MultiProtocolExtensionsCapability,
     };
     use netcalyx_bgp_pkt::nlri::{
-        Ipv4Unicast, Ipv4UnicastAddress, Ipv6Unicast, Ipv6UnicastAddress,
+        Ipv4NlriMplsLabelsAddress, Ipv4Unicast, Ipv4UnicastAddress, Ipv6Unicast,
+        Ipv6UnicastAddress, MplsLabel,
     };
     use netcalyx_bgp_pkt::open::{BgpOpenMessage, BgpOpenMessageParameter};
     use netcalyx_bgp_pkt::path_attribute::{MpReach, MpUnreach, PathAttribute, PathAttributeValue};
@@ -538,6 +539,136 @@ mod tests {
                     ([].as_slice(), [].as_slice()),
                 ] {
                     assert_eq!(negotiate_multiple_labels(sent, received), (vec![], vec![]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bidirectional_multiple_labels_decoding() {
+        let local_id = Ipv4Addr::new(192, 0, 2, 1);
+        let remote_id = Ipv4Addr::new(192, 0, 2, 2);
+        let header = |adj_rib_out, bgp_id| {
+            PeerHeader::new(
+                BmpPeerType::GlobalInstancePeer {
+                    ipv6: false,
+                    post_policy: false,
+                    asn2: false,
+                    adj_rib_out,
+                },
+                None,
+                Some(IpAddr::V4(remote_id)),
+                64512,
+                bgp_id,
+                None,
+            )
+        };
+        let open = |bgp_id, count| {
+            BgpMessage::Open(BgpOpenMessage::new(
+                64512,
+                180,
+                bgp_id,
+                vec![BgpOpenMessageParameter::Capabilities(vec![
+                    BgpCapability::MultipleLabels(vec![MultipleLabel::new(
+                        AddressType::Ipv4NlriMplsLabels,
+                        count,
+                    )]),
+                ])],
+            ))
+        };
+        for version in [BmpVersion::Version3, BmpVersion::Version4] {
+            for peer_up_out in [false, true] {
+                let mut codec = BmpCodec::default();
+                let mut buf = BytesMut::new();
+                let peer_up = v3::PeerUpNotificationMessage::build(
+                    header(peer_up_out, local_id),
+                    Some(IpAddr::V4(local_id)),
+                    Some(179),
+                    Some(12345),
+                    open(local_id, 2),
+                    open(remote_id, 5),
+                    vec![],
+                )
+                .unwrap();
+                let peer_up = match version {
+                    BmpVersion::Version3 => {
+                        BmpMessage::V3(v3::BmpMessageValue::PeerUpNotification(peer_up))
+                    }
+                    BmpVersion::Version4 => {
+                        BmpMessage::V4(v4::BmpMessageValue::PeerUpNotification(peer_up))
+                    }
+                };
+                codec.update_parsing_ctx(&peer_up);
+                for bgp_id in [local_id, remote_id] {
+                    for adj_rib_out in [false, true, false, true] {
+                        let mut labels = vec![MplsLabel::new([0, 16, 0])];
+                        if adj_rib_out {
+                            labels.push(MplsLabel::new([0, 32, 0]));
+                        }
+                        labels.push(MplsLabel::new([0, 48, 1]));
+                        let route = Ipv4NlriMplsLabelsAddress::from(
+                            None,
+                            labels,
+                            "198.51.100.0/24".parse().unwrap(),
+                        )
+                        .unwrap();
+                        let update = BgpMessage::Update(BgpUpdateMessage::new(
+                            vec![],
+                            vec![
+                                PathAttribute::from(
+                                    true,
+                                    false,
+                                    false,
+                                    false,
+                                    PathAttributeValue::MpReach(MpReach::Ipv4NlriMplsLabels {
+                                        next_hop: IpAddr::V4(local_id),
+                                        next_hop_local: None,
+                                        nlri: vec![route.clone()],
+                                    }),
+                                )
+                                .unwrap(),
+                                PathAttribute::from(
+                                    true,
+                                    false,
+                                    false,
+                                    false,
+                                    PathAttributeValue::MpUnreach(MpUnreach::Ipv4NlriMplsLabels {
+                                        nlri: vec![route],
+                                    }),
+                                )
+                                .unwrap(),
+                            ],
+                            vec![],
+                        ));
+                        let message = match version {
+                            BmpVersion::Version3 => {
+                                BmpMessage::V3(v3::BmpMessageValue::RouteMonitoring(
+                                    v3::RouteMonitoringMessage::build(
+                                        header(adj_rib_out, bgp_id),
+                                        update,
+                                    )
+                                    .unwrap(),
+                                ))
+                            }
+                            BmpVersion::Version4 => {
+                                BmpMessage::V4(v4::BmpMessageValue::RouteMonitoring(
+                                    v4::RouteMonitoringMessage::build(
+                                        header(adj_rib_out, bgp_id),
+                                        update,
+                                        vec![],
+                                    )
+                                    .unwrap(),
+                                ))
+                            }
+                        };
+                        codec.encode(message.clone(), &mut buf).unwrap();
+                        assert_eq!(
+                            codec.decode(&mut buf).unwrap(),
+                            Some(message),
+                            "version={version:?}, peer_up_out={peer_up_out}, out={adj_rib_out}"
+                        );
+                        assert!(buf.is_empty());
+                    }
                 }
             }
         }
