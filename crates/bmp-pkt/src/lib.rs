@@ -232,6 +232,16 @@ pub enum BmpPeerType {
 }
 
 impl BmpPeerType {
+    /// Whether this header describes the local send direction.
+    pub const fn is_adj_rib_out(&self) -> bool {
+        match self {
+            Self::GlobalInstancePeer { adj_rib_out, .. }
+            | Self::RdInstancePeer { adj_rib_out, .. }
+            | Self::LocalInstancePeer { adj_rib_out, .. } => *adj_rib_out,
+            _ => false,
+        }
+    }
+
     /// Get the IANA Code for the peer type
     pub const fn get_type(&self) -> BmpPeerTypeCode {
         match self {

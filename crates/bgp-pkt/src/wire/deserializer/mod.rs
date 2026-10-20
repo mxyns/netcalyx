@@ -214,38 +214,10 @@ impl BgpParsingContext {
         &mut self.add_path
     }
 
-     /// Store negotiated ADD-PATH support from the local OPEN's perspective.
-     pub fn update_negotiated_add_path(
-       &mut self,
-       add_path: &crate::capabilities::AddPathCapability,
-     ) {
-       for address_family in add_path.address_families() {
-           self.add_path
-               .insert(address_family.address_type(), address_family.clone());
-       }
-     }
-
-     /// Whether ADD-PATH applies to `address_type` for the current message
-     /// direction.
-     #[inline]
-     pub fn add_path_enabled(&self, address_type: AddressType) -> bool {
-       self.add_path
-           .add_path_enabled(address_type, !self.inbound_message)
-     }
-
-    #[inline]
-    pub fn update_add_path_capability(&mut self, add_path: &AddPathCapability, adj_rib_out: bool) {
+    pub fn update_add_path(&mut self, add_path: &AddPathCapability) {
         for address_family in add_path.address_families() {
-            let add_path_support = if adj_rib_out {
-                address_family.send()
-            } else {
-                address_family.receive()
-            };
-            self.add_path_mut()
-                .insert(
-                    address_family.address_type(),
-                    AddPathAddressFamily::new(address_family.address_type(), false, add_path_support),
-                );
+            self.add_path
+                .insert(address_family.address_type(), *address_family);
         }
     }
 
@@ -255,12 +227,20 @@ impl BgpParsingContext {
             .insert(multiple_label.address_type(), multiple_label.count());
     }
 
+    /// Whether ADD-PATH applies to `address_type` for the current message
+    /// direction.
     #[inline]
-    pub fn update_capabilities(&mut self, capability: &BgpCapability, adj_rib_out: bool) {
+    pub fn add_path_enabled(&self, address_type: AddressType) -> bool {
+        self.add_path
+            .add_path_enabled(address_type, !self.inbound_message)
+    }
+
+    /// Store capability settings, including both ADD-PATH directions from
+    /// the local OPEN's perspective.
+    #[inline]
+    pub fn update_capabilities(&mut self, capability: &BgpCapability) {
         match capability {
-            BgpCapability::AddPath(add_path) => {
-                self.update_add_path_capability(add_path, adj_rib_out);
-            }
+            BgpCapability::AddPath(add_path) => self.update_add_path(add_path),
             BgpCapability::MultipleLabels(multiple_labels) => {
                 for multiple_label in multiple_labels.labels() {
                     self.update_multiple_label_capability(multiple_label);
