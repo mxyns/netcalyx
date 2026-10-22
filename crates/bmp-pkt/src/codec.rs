@@ -19,7 +19,7 @@
 use crate::iana::BmpVersion;
 use crate::wire::deserializer::BmpMessageParsingError;
 use crate::wire::serializer::BmpMessageWritingError;
-use crate::{BmpMessage, BmpPeerType, PeerKey, v3, v4};
+use crate::{BmpMessage, PeerKey, v3, v4};
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use netcalyx_bgp_pkt::BgpMessage;
@@ -92,7 +92,22 @@ fn get_caps(
 fn negotiate_add_path(
     sent_caps: &[&AddPathCapability],
     received_caps: &[&AddPathCapability],
+    is_loc_rib: bool,
 ) -> AddPathCapability {
+    // For local-rib, the RX and TX opens must be identical. The mere presence
+    // of an add-path capability indicates usage of add-path in the loc-rib
+    // messages of this AFI/SAFI, regardless of the capability value announced.
+    // c.f RFC9069 Section 5.2
+    if is_loc_rib {
+        return AddPathCapability::new(
+            sent_caps
+                .iter()
+                .flat_map(|x| x.address_families())
+                .map(|x| AddPathAddressFamily::new(x.address_type(), true, true))
+                .collect(),
+        );
+    }
+
     AddPathCapability::new(
         sent_caps
             .iter()
@@ -141,8 +156,9 @@ impl BmpParsingContext {
             let (sent_add_path_caps, sent_multiple_labels_caps) = get_caps(send_caps);
             let (received_add_path_caps, received_multiple_labels_caps) = get_caps(received_caps);
 
+            let is_loc_rib = peer_up.peer_header().peer_type().is_loc_rib();
             let negotiated_add_path =
-                negotiate_add_path(&sent_add_path_caps, &received_add_path_caps);
+                negotiate_add_path(&sent_add_path_caps, &received_add_path_caps, is_loc_rib);
             let sent_multiple_labels_caps: HashSet<&MultipleLabel> = HashSet::from_iter(
                 sent_multiple_labels_caps
                     .into_iter()
@@ -173,7 +189,7 @@ impl BmpParsingContext {
             // a Peer Up with the OPEN message indicating the address family
             // capabilities. A BMP receiver MUST process these capabilities
             // to know which peer belongs to which address family.
-            if !matches!(peer_key.peer_type(), BmpPeerType::LocRibInstancePeer { .. }) {
+            if !is_loc_rib {
                 bgp_ctx.add_path_mut().clear();
                 bgp_ctx.multiple_labels_mut().clear();
             }
@@ -185,7 +201,7 @@ impl BmpParsingContext {
             // Add a key for the BGP Peer of the first router
             // In Loc-Rib the bgp open message is duplicated,
             // no need to go through it again.
-            if !matches!(peer_key.peer_type(), BmpPeerType::LocRibInstancePeer { .. }) {
+            if !is_loc_rib {
                 let peer_key = PeerKey::new(
                     peer_up.peer_header().address(),
                     peer_up.peer_header().peer_type(),
@@ -751,24 +767,10 @@ mod tests {
                     |bgp_id| BgpMessage::Open(BgpOpenMessage::new(64512, 180, bgp_id, vec![]));
                 let reset = v3::PeerUpNotificationMessage::build(
                     header(peer_up_out, local_id),
-                    Some(IpAddr::V4(local_id)),
-                    Some(179),
-                    Some(12345),
                     empty_open(local_id),
                     empty_open(remote_id),
-                    vec![],
-                )
-                .unwrap();
-                let reset = match version {
-                    BmpVersion::Version3 => {
-                        BmpMessage::V3(v3::BmpMessageValue::PeerUpNotification(reset))
-                    }
-                    BmpVersion::Version4 => {
-                        BmpMessage::V4(v4::BmpMessageValue::PeerUpNotification(reset))
-                    }
-                };
-                codec.encode(reset.clone(), &mut buf).unwrap();
-                assert_eq!(codec.decode(&mut buf).unwrap(), Some(reset));
+                );
+                assert_codec_roundtrip(&mut codec, reset);
                 for bgp_id in [local_id, remote_id] {
                     let key = PeerKey::from_peer_header(&header(false, bgp_id));
                     let ctx = codec.ctx.get_peer(&key).unwrap();
