@@ -27,10 +27,12 @@ use nom::error::ErrorKind;
 
 #[test]
 fn test_multiple_labels() -> Result<(), BGPCapabilityWritingError> {
-    let capability = BgpCapability::MultipleLabels(vec![
+    let labels = MultipleLabelsCapability::new(vec![
         MultipleLabel::new(AddressType::Ipv4NlriMplsLabels, 2),
         MultipleLabel::new(AddressType::Ipv6NlriMplsLabels, 5),
-    ]);
+    ])
+    .unwrap();
+    let capability = BgpCapability::MultipleLabels(labels);
     let wire = [8, 8, 0, 1, 4, 2, 0, 2, 4, 5];
     test_parsed_completely(&wire, &capability);
     test_write(&capability, &wire)?;
