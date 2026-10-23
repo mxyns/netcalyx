@@ -23,7 +23,7 @@ use crate::{BmpMessage, BmpPeerType, PeerKey, v3, v4};
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use netcalyx_bgp_pkt::BgpMessage;
-use netcalyx_bgp_pkt::capabilities::BgpCapability;
+use netcalyx_bgp_pkt::capabilities::{BgpCapability, MultipleLabelsCapability};
 use std::collections::HashSet;
 
 use crate::wire::deserializer::BmpParsingContext;
@@ -60,7 +60,7 @@ pub struct BmpCodec {
 #[inline]
 fn get_caps(
     capabilities: Vec<&BgpCapability>,
-) -> (Vec<AddPathCapability>, Vec<Vec<MultipleLabel>>) {
+) -> (Vec<AddPathCapability>, Vec<MultipleLabelsCapability>) {
     let add_path_caps = capabilities
         .iter()
         .flat_map(|cap| {
@@ -71,7 +71,7 @@ fn get_caps(
             }
         })
         .cloned()
-        .collect::<Vec<AddPathCapability>>();
+        .collect();
     let multiple_labels_caps = capabilities
         .iter()
         .flat_map(|cap| {
@@ -82,7 +82,7 @@ fn get_caps(
             }
         })
         .cloned()
-        .collect::<Vec<Vec<MultipleLabel>>>();
+        .collect();
     (add_path_caps, multiple_labels_caps)
 }
 
@@ -116,15 +116,26 @@ impl BmpParsingContext {
                 HashSet::from_iter(sent_add_path_caps);
             let received_add_path_caps: HashSet<AddPathCapability> =
                 HashSet::from_iter(received_add_path_caps);
-            let sent_multiple_labels_caps: HashSet<MultipleLabel> =
-                HashSet::from_iter(sent_multiple_labels_caps.into_iter().flatten());
-            let received_multiple_labels_caps: HashSet<MultipleLabel> =
-                HashSet::from_iter(received_multiple_labels_caps.into_iter().flatten());
+            let sent_multiple_labels_caps: HashSet<MultipleLabel> = HashSet::from_iter(
+                sent_multiple_labels_caps
+                    .into_iter()
+                    .flat_map(|x| x.labels().clone()),
+            );
+            let received_multiple_labels_caps: HashSet<MultipleLabel> = HashSet::from_iter(
+                received_multiple_labels_caps
+                    .into_iter()
+                    .flat_map(|x| x.labels().clone()),
+            );
 
-            let common_add_path_caps: Vec<&AddPathCapability> =
-                Vec::from_iter(sent_add_path_caps.intersection(&received_add_path_caps));
-            let common_multiple_labels_caps: Vec<&MultipleLabel> = Vec::from_iter(
-                sent_multiple_labels_caps.intersection(&received_multiple_labels_caps),
+            let common_add_path_caps: Vec<AddPathCapability> = Vec::from_iter(
+                sent_add_path_caps
+                    .intersection(&received_add_path_caps)
+                    .cloned(),
+            );
+            let common_multiple_labels_caps: Vec<MultipleLabel> = Vec::from_iter(
+                sent_multiple_labels_caps
+                    .intersection(&received_multiple_labels_caps)
+                    .cloned(),
             );
 
             // Add Key for the router announcing BMP to the collector
@@ -155,19 +166,13 @@ impl BmpParsingContext {
             };
 
             for add_path in &common_add_path_caps {
-                bgp_ctx
-                    .update_capabilities(&BgpCapability::AddPath((*add_path).clone()), adj_rib_out)
+                bgp_ctx.update_capabilities(&BgpCapability::AddPath(add_path.clone()), adj_rib_out);
             }
-            bgp_ctx.update_capabilities(
-                &BgpCapability::MultipleLabels(
-                    common_multiple_labels_caps
-                        .iter()
-                        .copied()
-                        .cloned()
-                        .collect(),
-                ),
-                adj_rib_out,
-            );
+            let multiple_labels =
+                MultipleLabelsCapability::new(common_multiple_labels_caps.clone())
+                    .expect("the intersection of valid Multiple Labels capabilities is valid");
+            bgp_ctx
+                .update_capabilities(&BgpCapability::MultipleLabels(multiple_labels), adj_rib_out);
 
             // Add a key for the BGP Peer of the first router
             // In Loc-Rib the bgp open message is duplicated,
@@ -192,18 +197,15 @@ impl BmpParsingContext {
                 };
                 for add_path in &common_add_path_caps {
                     bgp_ctx.update_capabilities(
-                        &BgpCapability::AddPath((*add_path).clone()),
+                        &BgpCapability::AddPath(add_path.clone()),
                         adj_rib_out,
-                    )
+                    );
                 }
+                let multiple_labels =
+                    MultipleLabelsCapability::new(common_multiple_labels_caps.clone())
+                        .expect("the intersection of valid Multiple Labels capabilities is valid");
                 bgp_ctx.update_capabilities(
-                    &BgpCapability::MultipleLabels(
-                        common_multiple_labels_caps
-                            .iter()
-                            .copied()
-                            .cloned()
-                            .collect(),
-                    ),
+                    &BgpCapability::MultipleLabels(multiple_labels),
                     adj_rib_out,
                 );
             }

@@ -174,7 +174,7 @@ impl BgpParsingContext {
                 }
             }
             BgpCapability::MultipleLabels(multiple_labels) => {
-                for multiple_label in multiple_labels {
+                for multiple_label in multiple_labels.labels() {
                     self.multiple_labels_mut()
                         .insert(multiple_label.address_type(), multiple_label.count());
                 }
